@@ -1,11 +1,15 @@
+import time
 import pprint
+from threading import Thread
+from httpx import delete
 from openai import OpenAI
+from openai.types.beta.threads.run import Run
 from referencing import Resource
 import streamlit as st
 from pprint import pprint
 from typing import Any, Literal
 
-from gaclasses import MockExam, Submission
+from gaclasses import Assessment, MockExam, Submission
 from gdrive import (
     convert_gdrive_file_to_markdown,
     ensure_gdrive_directory,
@@ -73,7 +77,7 @@ def ensure_batch_directory(drive_service: Resource[Any], batch_name: str) -> str
 def filter_md_files(md_files: dict[str, str]) -> dict[str, str]:
     """Filters out files whose base names end with ' - synthese', ' - essai', or ' - traduction'."""
     excluded_suffixes: tuple[str, str, str] = (
-        " - synthese",
+        " - synthèse",
         " - essai",
         " - traduction",
         " - assessment",
@@ -91,6 +95,43 @@ def filter_md_files(md_files: dict[str, str]) -> dict[str, str]:
     return filtered_files
 
 
+def call_assistant(assistant_id: str, msg: str) -> str:
+    print(f"Calling assistant {assistant_id} with message: {msg}")
+    client: OpenAI = st.session_state.openai_client
+    try:
+        thread: Thread = client.beta.threads.create()
+        print(f"Thread created: {thread.id}")
+        msg = client.beta.threads.messages.create(
+            thread_id=thread.id,
+            role="user",
+            content=f"Grade this text per instructions: {msg}",
+        )
+        print(f"Message created: {msg.id}")
+        run: Run = client.beta.threads.runs.create_and_poll(
+            thread_id=thread.id,
+            assistant_id=assistant_id,
+            instructions="Grade this text per instructions",
+        )
+        print(f"Run created: {run.id}")
+        while run.status != "completed":
+            print(f"Waiting for run {run.id} to complete, status is {run.status}...")
+            time.sleep(1)
+
+        msgs = client.beta.threads.messages.list(thread_id=thread.id)
+        print(f"Run {run.id} completed, deleting thread {thread.id}...")
+        client.beta.threads.delete(thread.id)
+        for m in msgs:
+            print(f"{m.role}: {m.content[0].text.value}")
+        return msgs.data[0].content[0].text.value
+    except Exception as e:
+        st.error(f"Error grading section: {e}")
+        return "Error grading section"
+
+
+def get_assessment(exam: MockExam) -> Assessment:
+    st.info(f"Getting assessment for mock exam {exam.description}...")
+
+
 def mock_exam_grading_page() -> None:
     drive_service: Resource = st.session_state.drive_service
     batch_name: str = st.session_state.config.current_batch
@@ -98,7 +139,7 @@ def mock_exam_grading_page() -> None:
     with st.form(
         "convert_to_md", border=True, clear_on_submit=False, enter_to_submit=False
     ):
-        st.subheader("Choose the student submissions (docx or odt):")
+        st.subheader("Step 1: Convert student submissions to markdown")
         submissions: dict[str, str] = list_gdrive_files(
             drive_service, st.session_state.attachments_folder_id
         )
@@ -133,7 +174,7 @@ def mock_exam_grading_page() -> None:
         clear_on_submit=False,
         enter_to_submit=False,
     ):
-        st.subheader("Choose the student submissions (md):")
+        st.subheader("Step 2: Split Markdown files into sections")
         batch_dir_id: str | None = ensure_batch_directory(drive_service, batch_name)
         if batch_dir_id is None:
             st.error(f"Batch directory {batch_name} not found!")
@@ -151,10 +192,12 @@ def mock_exam_grading_page() -> None:
 
     if split_button:
         # Split the markdown files
+        if len(selected_md_files) == 0:
+            st.error("No markdown files selected!")
+            return
         with st.status("Splitting markdown files..."):
             st.info("Splitting markdown files...")
             nerrors: int = 0
-            exams: dict[str, MockExam] = {}
             for md_file in selected_md_files:
                 md_file_id: str = md_files[md_file]
                 mock_exam: MockExam | None = generate_mock_exam(
@@ -167,7 +210,7 @@ def mock_exam_grading_page() -> None:
                     st.success(f"Mock exam generated for file {md_file}")
                     print(f"Mock exam for {md_file}:")
                     pprint(mock_exam.dict())
-                    exams[md_file] = mock_exam
+                    st.session_state.mock_exams[md_file] = mock_exam
                     write_mock_exam_sections(
                         drive_service, batch_dir_id, md_file, mock_exam
                     )
@@ -176,9 +219,54 @@ def mock_exam_grading_page() -> None:
                 st.success("Markdown files split successfully!")
             else:
                 st.error(f"Encountered {nerrors} errors splitting markdown files!")
-        selected_exam: str = st.selectbox("Select mock exam", list(exams.keys()))
-        st.subheader(f"Mock exam for {selected_exam}")
-        st.json(exams[selected_exam].dict(), expanded=False)
+
+    with st.form(
+        "Grade Mock Exam",
+        border=True,
+        clear_on_submit=False,
+        enter_to_submit=False,
+    ):
+        print("Entering grading form...")
+        st.subheader("Step 3: Grade Mock Exam Sections")
+        st.session_state.selected_exam = st.selectbox(
+            "Select mock exam", list(st.session_state.mock_exams.keys())
+        )
+        if st.session_state.selected_exam is not None:
+            print(f"Selected exam: {st.session_state.selected_exam}")
+            st.subheader(f"Mock exam for {st.session_state.selected_exam}")
+            st.json(
+                st.session_state.mock_exams[st.session_state.selected_exam].dict(),
+                expanded=False,
+            )
+        grade_button: bool = st.form_submit_button("Grade Mock Exam")
+    if grade_button:
+        print("Grading button pushed...")
+        if st.session_state.selected_exam is None:
+            st.error("No mock exam selected!")
+            return
+        print("Grading mock exam...")
+        with st.status("Grading mock exam..."):
+            exam: MockExam = st.session_state.mock_exams[st.session_state.selected_exam]
+            st.info("Grading Synthèse section...")
+            synthese_grade: str = call_assistant(
+                st.session_state.config.synthese_assistant_id,
+                exam.synthese.markdown_content,
+            )
+            st.info("Grading Essai section...")
+            essai_grade: str = call_assistant(
+                st.session_state.config.essai_assistant_id,
+                exam.essai.markdown_content,
+            )
+            st.info("Grading Traduction section...")
+            traduction_grade: str = call_assistant(
+                st.session_state.config.traduction_assistant_id,
+                exam.traduction.markdown_content,
+            )
+            st.success("Mock exam graded successfully!")
+        st.subheader("Mock Exam Grades")
+        st.markdown(f"**Synthèse Grade**:\n\n {synthese_grade}")
+        st.markdown(f"**Essai Grade**:\n\n {essai_grade}")
+        st.markdown(f"**Traduction Grade**:\n\n {traduction_grade}")
 
 
 mock_exam_grading_page()

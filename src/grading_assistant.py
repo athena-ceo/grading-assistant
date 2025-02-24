@@ -18,14 +18,16 @@ ATTACHMENTS_FOLDER_ID: str = "1WcoD2aBEdRqLTmj7A5BgUTYifD7Y3Ysy"
 
 def init_config() -> None:
     if "config" in st.session_state:
-        pass
+        return
     st.session_state.config = Configuration.load_from_drive(None)
+    st.session_state.mock_exams = {}
+    st.session_state.selected_exam = None
 
 
 # Google Drive Setup
 def init_google_drive() -> None:
     if "drive_service" in st.session_state:
-        pass
+        return
     service_account_file = "service_account.json"
 
     drive_service: Any = create_drive_service(service_account_file)
@@ -39,7 +41,7 @@ def init_google_drive() -> None:
 
 def init_openai() -> None:
     if "openai_client" in st.session_state:
-        pass
+        return
     api_key: str = st.secrets["OpenAI"]["OPENAI_API_KEY"]
     openai_org_id: str = st.secrets["OpenAI"]["OPENAI_ORGANIZATION_ID"]
     openai_project_id: str = st.secrets["OpenAI"]["OPENAI_PROJECT_ID"]

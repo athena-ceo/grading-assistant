@@ -11,6 +11,7 @@ from pydantic import BaseModel, Field
 import pypandoc
 import os
 import tempfile
+import streamlit as st
 
 
 class MyData(BaseModel):
@@ -28,15 +29,12 @@ def create_drive_service(service_account_file: str) -> Optional[Resource]:
         A Google Drive service object, or None if an error occurs.
     """
     try:
-        creds: service_account.Credentials = (
-            service_account.Credentials.from_service_account_file(
-                filename=service_account_file,
-                scopes=[
-                    "https://www.googleapis.com/auth/drive"
-                ],  # Note: This scope allows read/write
-            )
+        credentials: service_account.Credentials = (
+            service_account.Credentials.from_service_account_info(st.secrets["gdrive"])
         )
-        return build("drive", "v3", credentials=creds)
+        result = build("drive", "v3", credentials=credentials)
+        print(f"Drive service created successfully: {result}")
+        return result
     except Exception as e:
         print(f"Error creating Drive service: {e}")
         return None
@@ -339,7 +337,7 @@ def convert_gdrive_file_to_markdown(
         # Step 4: Upload the markdown file to Google Drive
         print(f"Uploading Markdown file to Google Drive...")
         new_file_id: str | None = replace_gdrive_file(
-            drive_service, markdown_path, target_dir_id
+            drive_service, markdown_path, markdown_name, target_dir_id
         )
 
         # Cleanup temporary files
@@ -449,7 +447,10 @@ def upload_markdown_to_gdrive(
 
 
 def replace_gdrive_file(
-    drive_service: Resource, local_file_path: str, target_dir_id: str
+    drive_service: Resource,
+    local_file_path: str,
+    gdrive_file_name: str,
+    target_dir_id: str,
 ) -> str | None:
     """
     Uploads a local file to a specific Google Drive folder, replacing any existing file with the same name.
@@ -460,11 +461,9 @@ def replace_gdrive_file(
     :return: The new uploaded file's Google Drive ID.
     """
     try:
-        file_name = os.path.basename(local_file_path)  # Extract the file name
-
         # Step 1: Search for an existing file with the same name in the target directory
-        query = (
-            f"name = '{file_name}' and '{target_dir_id}' in parents and trashed = false"
+        query: str = (
+            f"name = '{gdrive_file_name}' and '{target_dir_id}' in parents and trashed = false"
         )
         response = (
             drive_service.files().list(q=query, fields="files(id, name)").execute()
@@ -475,10 +474,15 @@ def replace_gdrive_file(
         if files:
             existing_file_id = files[0]["id"]
             drive_service.files().delete(fileId=existing_file_id).execute()
-            print(f"🗑️ Existing file '{file_name}' (ID: {existing_file_id}) deleted.")
+            print(
+                f"🗑️ Existing file '{gdrive_file_name}' (ID: {existing_file_id}) deleted."
+            )
 
         # Step 3: Upload the new file
-        file_metadata = {"name": file_name, "parents": [target_dir_id]}
+        file_metadata: dict[str, Any] = {
+            "name": gdrive_file_name,
+            "parents": [target_dir_id],
+        }
         media = MediaFileUpload(local_file_path, mimetype="text/markdown")
 
         uploaded_file = (
@@ -488,7 +492,7 @@ def replace_gdrive_file(
         )
 
         print(
-            f"✅ '{file_name}' uploaded successfully to Drive folder {target_dir_id}."
+            f"✅ '{local_file_path}' uploaded successfully to file {gdrive_file_name} in Drive folder {target_dir_id}."
         )
         return uploaded_file["id"]
 
