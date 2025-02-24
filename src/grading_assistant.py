@@ -49,6 +49,9 @@ def init_openai() -> None:
         organization=openai_org_id, project=openai_project_id, api_key=api_key
     )
     st.session_state.openai_client = client
+    print("Known assistants:")
+    for assistant in client.beta.assistants.list().data:
+        print(f" Assistant: {assistant.id} - {assistant.name}")
 
 
 def init() -> None:
@@ -74,6 +77,6 @@ grading_page: StreamlitPage = st.Page(
 
 pg: StreamlitPage = st.navigation([welcome_page, config_page, grading_page])
 
-st.header("Welcome to the Grading Assistant!")
+st.header("Professor Ghanem's Grading Assistant", divider=True)
 
 pg.run()

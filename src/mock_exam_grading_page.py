@@ -96,7 +96,7 @@ def filter_md_files(md_files: dict[str, str]) -> dict[str, str]:
 
 
 def call_assistant(assistant_id: str, msg: str) -> str:
-    print(f"Calling assistant {assistant_id} with message: {msg}")
+    print(f"Calling assistant {assistant_id} with message: {len(msg)} chars.")
     client: OpenAI = st.session_state.openai_client
     try:
         thread: Thread = client.beta.threads.create()
@@ -121,7 +121,7 @@ def call_assistant(assistant_id: str, msg: str) -> str:
         print(f"Run {run.id} completed, deleting thread {thread.id}...")
         client.beta.threads.delete(thread.id)
         for m in msgs:
-            print(f"{m.role}: {m.content[0].text.value}")
+            print(f"{m.role}: {len(m.content[0].text.value)} chars")
         return msgs.data[0].content[0].text.value
     except Exception as e:
         st.error(f"Error grading section: {e}")
@@ -245,8 +245,8 @@ def mock_exam_grading_page() -> None:
             st.error("No mock exam selected!")
             return
         print("Grading mock exam...")
-        with st.status("Grading mock exam..."):
-            exam: MockExam = st.session_state.mock_exams[st.session_state.selected_exam]
+        exam: MockExam = st.session_state.mock_exams[st.session_state.selected_exam]
+        with st.status(f"Grading mock exam..."):
             st.info("Grading Synthèse section...")
             synthese_grade: str = call_assistant(
                 st.session_state.config.synthese_assistant_id,
