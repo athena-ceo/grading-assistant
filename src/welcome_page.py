@@ -3,15 +3,12 @@ import streamlit as st
 st.write(
     "The grading assistant uses the power of Artificial Intelligence to help you grade student submissions!"
 )
-
 st.write(
-    "The app will let you select docx or odt files from the Google Drive Attachments directory where the zap automatically saves the student submissions from emails sent to ghaninaghanemprof@gmail.com."
+    "The app will let you select docx or odt files from the Google Drive Attachments directory where the zap automatically saves the student submissions from emails sent to ghanimaghanemprof@gmail.com."
 )
-
 st.write(
     "You can configure the grading assistant by clicking on the 'Configuration' tab on the left."
 )
-
 st.write(
     "Then you can grade a set of chosen submissions by clicking on the 'Grading' tab on the left."
 )

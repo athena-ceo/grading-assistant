@@ -110,7 +110,7 @@ def call_assistant(assistant_id: str, msg: str) -> str:
         run: Run = client.beta.threads.runs.create_and_poll(
             thread_id=thread.id,
             assistant_id=assistant_id,
-            instructions="Grade this text per instructions",
+            #           instructions="Grade this text per instructions",
         )
         print(f"Run created: {run.id}")
         while run.status != "completed":

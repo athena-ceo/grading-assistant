@@ -231,26 +231,30 @@ def ensure_gdrive_directory(
 
 def list_gdrive_files(
     drive_service: Any, folder_id: str, extensions: tuple[str, ...] = ("docx", "odt")
-) -> dict[str, str]:
+) -> dict[str, str] | None:
     """Lists files in a Google Drive folder with specific extensions."""
     query: str = (
         f"'{folder_id}' in parents and mimeType!='application/vnd.google-apps.folder' and trashed=false"
     )
-    results = (
-        drive_service.files()
-        .list(q=query, fields="files(id, name, mimeType)")
-        .execute()
-    )
-    files = results.get("files", [])
+    try:
+        results = (
+            drive_service.files()
+            .list(q=query, fields="files(id, name, mimeType)")
+            .execute()
+        )
+        files = results.get("files", [])
 
-    # Filter files by allowed extensions
-    filtered_files: dict[Any, Any] = {
-        file["name"]: file["id"]
-        for file in files
-        if file["name"].lower().endswith(extensions)
-    }
+        # Filter files by allowed extensions
+        filtered_files: dict[Any, Any] = {
+            file["name"]: file["id"]
+            for file in files
+            if file["name"].lower().endswith(extensions)
+        }
 
-    return filtered_files  # Returns {filename: file_id} dictionary
+        return filtered_files  # Returns {filename: file_id} dictionary
+    except Exception as e:
+        print(f"An error occurred: {e}")
+        return None  # Return empty dictionary in case of an error
 
 
 def get_gdrive_folder_path(drive_service: Resource, folder_id: str) -> str | None:
