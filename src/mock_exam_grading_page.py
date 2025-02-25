@@ -220,53 +220,60 @@ def mock_exam_grading_page() -> None:
             else:
                 st.error(f"Encountered {nerrors} errors splitting markdown files!")
 
-    with st.form(
-        "Grade Mock Exam",
-        border=True,
-        clear_on_submit=False,
-        enter_to_submit=False,
-    ):
-        print("Entering grading form...")
+    with st.container(border=True):
+        print("Entering grading area...")
         st.subheader("Step 3: Grade Mock Exam Sections")
-        st.session_state.selected_exam = st.selectbox(
+        st.session_state.selected_exams = st.multiselect(
             "Select mock exam", list(st.session_state.mock_exams.keys())
         )
-        if st.session_state.selected_exam is not None:
-            print(f"Selected exam: {st.session_state.selected_exam}")
-            st.subheader(f"Mock exam for {st.session_state.selected_exam}")
+        for mock_exam_key in st.session_state.selected_exams:
+            print(f"Selected exam: {mock_exam_key}")
+            st.subheader(f"Mock exam for {mock_exam_key}")
             st.json(
-                st.session_state.mock_exams[st.session_state.selected_exam].dict(),
+                st.session_state.mock_exams[mock_exam_key].dict(),
                 expanded=False,
             )
-        grade_button: bool = st.form_submit_button("Grade Mock Exam")
+        with st.form(
+            "Grade Mock Exams",
+            border=True,
+            clear_on_submit=False,
+            enter_to_submit=False,
+        ):
+            grade_button: bool = st.form_submit_button("Grade Mock Exam")
     if grade_button:
         print("Grading button pushed...")
-        if st.session_state.selected_exam is None:
-            st.error("No mock exam selected!")
+        if len(st.session_state.selected_exams) == 0:
+            st.error("No mock exams selected!")
             return
-        print("Grading mock exam...")
-        exam: MockExam = st.session_state.mock_exams[st.session_state.selected_exam]
-        with st.status(f"Grading mock exam..."):
-            st.info("Grading Synthèse section...")
-            synthese_grade: str = call_assistant(
-                st.session_state.config.synthese_assistant_id,
-                exam.synthese.markdown_content,
-            )
-            st.info("Grading Essai section...")
-            essai_grade: str = call_assistant(
-                st.session_state.config.essai_assistant_id,
-                exam.essai.markdown_content,
-            )
-            st.info("Grading Traduction section...")
-            traduction_grade: str = call_assistant(
-                st.session_state.config.traduction_assistant_id,
-                exam.traduction.markdown_content,
-            )
-            st.success("Mock exam graded successfully!")
-        st.subheader("Mock Exam Grades")
-        st.markdown(f"**Synthèse Grade**:\n\n {synthese_grade}")
-        st.markdown(f"**Essai Grade**:\n\n {essai_grade}")
-        st.markdown(f"**Traduction Grade**:\n\n {traduction_grade}")
+        print("Grading mock exams...")
+        for selected_exam in st.session_state.selected_exams:
+            print(f"Grading mock exam {selected_exam}...")
+            exam: MockExam = st.session_state.mock_exams[selected_exam]
+            with st.status(f"Grading mock exam..."):
+                grade_section(exam.synthese)
+                grade_section(exam.essai)
+                grade_section(exam.traduction)
+
+
+def grade_section(section: Submission) -> str:
+    st.divider()
+    st.info(f"Grading section {section.submission_type()}...")
+    assessment: str = call_assistant(
+        section.get_assistant_id(st.session_state.config), section.markdown_content
+    )
+    file_name: str = f"{section.name} - {section.submission_type()} - assessment.md"
+    upload_markdown_to_gdrive(
+        st.session_state.drive_service,
+        file_name,
+        st.session_state.output_folder_id,
+        assessment,
+    )
+    st.success(
+        f"Section {section.submission_type()} graded successfully and saved to {file_name}!"
+    )
+    st.subheader(f"{section.submission_type()} Assessment")
+    st.markdown(assessment)
+    return assessment
 
 
 mock_exam_grading_page()
