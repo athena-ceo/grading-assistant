@@ -75,7 +75,7 @@ grading_page: StreamlitPage = st.Page(
     "mock_exam_grading_page.py", title="Mock Exam Grading", icon="📝"
 )
 
-pg: StreamlitPage = st.navigation([welcome_page, config_page, grading_page])
+pg: StreamlitPage = st.navigation([welcome_page, grading_page, config_page])
 
 st.header("Professor Ghanem's Grading Assistant", divider=True)
 

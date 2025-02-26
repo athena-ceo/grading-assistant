@@ -1,28 +1,35 @@
+from os import error
 import time
 import pprint
 from threading import Thread
-from httpx import delete
 from openai import OpenAI
 from openai.types.beta.threads.run import Run
 from referencing import Resource
 import streamlit as st
 from pprint import pprint
-from typing import Any, Literal
+from typing import Any
 
 from gaclasses import Assessment, MockExam, Submission
 from gdrive import (
     convert_gdrive_file_to_markdown,
+    convert_gdrive_file_to_docx,
     ensure_gdrive_directory,
+    get_gdrive_file_creation_date,
     get_gdrive_markdown_text,
     list_gdrive_files,
     upload_markdown_to_gdrive,
 )
+import gdrive
 
-SPLIT_PROMPT = "Analyze this student's mock exam in English for a French prépa and split it into three parts for the Synthèse, Essai, and Traduction."
+SPLIT_PROMPT: str = """Analyze this student's mock exam in English for a French prépa and split it into three parts for the Synthèse, Essai, and Traduction.
+    The original file ID is {file_id}.
+    The original file name is {file_name}.
+    The date of the file is {file_date}.
+    """
 
 
 def generate_mock_exam(
-    drive_service: Any, batch_dir_id: str, md_file_id: str
+    drive_service: Any, batch_dir_id: str, md_file_id: str, md_file: str
 ) -> MockExam | None:
     client: OpenAI = st.session_state.openai_client
     md_text: str | None = get_gdrive_markdown_text(
@@ -31,10 +38,16 @@ def generate_mock_exam(
     if md_text is None:
         return None
     try:
+        md_file_date: str = get_gdrive_file_creation_date(drive_service, md_file_id)
+        final_prompt: str = SPLIT_PROMPT.format(
+            file_id=md_file_id,
+            file_name=md_file,
+            file_date=md_file_date or "unknown",
+        )
         response: Any = client.beta.chat.completions.parse(
             model="gpt-4o-mini",
             messages=[
-                {"role": "system", "content": SPLIT_PROMPT},
+                {"role": "system", "content": final_prompt},
                 {"role": "user", "content": md_text},
             ],
             response_format=MockExam,
@@ -53,17 +66,25 @@ def write_mock_exam_sections(
     mock_exam: MockExam,
 ) -> None:
     st.info(f"Writing mock exam sections for {md_file_name}...")
+    error: bool = False
     for section in [mock_exam.synthese, mock_exam.essai, mock_exam.traduction]:
         section: Submission
         section_file_name: str = f"{md_file_name} - {section.submission_type()}.md"
         section_text: str = section.markdown_content
-        section_file_id: str = upload_markdown_to_gdrive(
+        section_file_id: str | None = upload_markdown_to_gdrive(
             drive_service, section_file_name, batch_dir_id, section_text
         )
-        st.success(
-            f"Mock exam section {section.submission_type()} written successfully to {section_file_id}!"
-        )
-    st.success(f"Mock exam sections written successfully for {md_file_name}!")
+        if section_file_id is None:
+            st.error(f"Error writing mock exam section {section.submission_type()}!")
+            error = True
+        else:
+            st.success(
+                f"Mock exam section {section.submission_type()} written successfully to {section_file_name}!"
+            )
+    if error:
+        st.error(f"Error writing mock exam sections for {md_file_name}!")
+    else:
+        st.success(f"Mock exam sections written successfully for {md_file_name}!")
     return
 
 
@@ -201,7 +222,7 @@ def mock_exam_grading_page() -> None:
             for md_file in selected_md_files:
                 md_file_id: str = md_files[md_file]
                 mock_exam: MockExam | None = generate_mock_exam(
-                    drive_service, batch_dir_id, md_file_id
+                    drive_service, batch_dir_id, md_file_id, md_file
                 )
                 if mock_exam is None:
                     st.error(f"Error generating mock exam for file {md_file}")
@@ -249,10 +270,42 @@ def mock_exam_grading_page() -> None:
         for selected_exam in st.session_state.selected_exams:
             print(f"Grading mock exam {selected_exam}...")
             exam: MockExam = st.session_state.mock_exams[selected_exam]
+            full_assessment: str = (
+                f"# Assessment of mock exam for {exam.name} on {exam.date}\n\n"
+            )
             with st.status(f"Grading mock exam..."):
-                grade_section(exam.synthese)
-                grade_section(exam.essai)
-                grade_section(exam.traduction)
+                full_assessment += (
+                    "## Synthèse\n\n" + grade_section(exam.synthese) + "\n\n"
+                )
+                full_assessment += "## Essai\n\n" + grade_section(exam.essai) + "\n\n"
+                full_assessment += "## Traduction\n\n" + grade_section(exam.traduction)
+            assessment_file_name: str = (
+                f"{exam.original_file_name.rsplit('.', 1)[0]} - assessment.md"
+            )
+            print(f"Uploading assessment to Google Drive as {assessment_file_name}...")
+            st.info(f"Uploading assessment to Google Drive...")
+            assessment_file_id: str | None = upload_markdown_to_gdrive(
+                st.session_state.drive_service,
+                assessment_file_name,
+                batch_dir_id,
+                full_assessment,
+            )
+            if assessment_file_id is None:
+                st.error(f"Error uploading assessment to Google Drive!")
+                return
+            print(f"Assessment uploaded to Google Drive as {assessment_file_id}!")
+            st.info(f"Converting assessment to docx...")
+            print(f"Converting assessment to docx...")
+            docx_assessment_file_id: str | None = convert_gdrive_file_to_docx(
+                st.session_state.drive_service,
+                assessment_file_id,
+                batch_dir_id,
+            )
+            if docx_assessment_file_id is None:
+                st.error(f"Error converting assessment to docx!")
+                return
+            print(f"Assessment converted to docx as {docx_assessment_file_id}!")
+            st.success(f"Assessment for {exam.name} saved to {assessment_file_name}!")
 
 
 def grade_section(section: Submission) -> str:
@@ -261,7 +314,10 @@ def grade_section(section: Submission) -> str:
     assessment: str = call_assistant(
         section.get_assistant_id(st.session_state.config), section.markdown_content
     )
-    file_name: str = f"{section.name} - {section.submission_type()} - assessment.md"
+    original_base_name: str = section.original_file_name.rsplit(".", 1)[0]
+    file_name: str = (
+        f"{original_base_name} - {section.submission_type()} - assessment.md"
+    )
     upload_markdown_to_gdrive(
         st.session_state.drive_service,
         file_name,

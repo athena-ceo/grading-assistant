@@ -358,6 +358,80 @@ def convert_gdrive_file_to_markdown(
         return None
 
 
+def convert_gdrive_file_to_docx(
+    drive_service, file_id: str, output_folder_id: str = None
+) -> str | None:
+    """
+    Downloads a Google Drive file, converts it to DOCX using pypandoc, and uploads it back to Google Drive.
+
+    Args:
+        drive_service: Authenticated Google Drive API service instance.
+        file_id (str): The ID of the file in Google Drive.
+        output_folder_id (str): The ID of the Google Drive folder to save the DOCX file.
+                               (Defaults to the same folder as the original file.)
+
+    Returns:
+        str | None: The file ID of the uploaded DOCX file, or None if conversion fails.
+    """
+    try:
+        # Get file metadata to retrieve original name and parent folder
+        file_metadata = (
+            drive_service.files().get(fileId=file_id, fields="name, parents").execute()
+        )
+        file_name = file_metadata["name"]
+        parent_folder_id: str = (
+            file_metadata["parents"][0]
+            if output_folder_id is None
+            else output_folder_id
+        )
+
+        # Extract base name (without extension)
+        base_name = os.path.splitext(file_name)[0]
+        temp_md_path: str = f"/tmp/{base_name}.md"
+        temp_docx_path: str = f"/tmp/{base_name}.docx"
+
+        # Download file content as Markdown
+        request = drive_service.files().get_media(fileId=file_id)
+        file_data = io.BytesIO()
+        downloader = MediaIoBaseDownload(file_data, request)
+        done = False
+        while not done:
+            status, done = downloader.next_chunk()
+
+        # Save the content as a temporary Markdown file
+        with open(temp_md_path, "wb") as f:
+            f.write(file_data.getvalue())
+
+        # Convert Markdown to DOCX using pypandoc
+        pypandoc.convert_file(temp_md_path, "docx", outputfile=temp_docx_path)
+
+        # Upload the converted DOCX back to Google Drive
+        file_metadata = {
+            "name": f"{base_name}.docx",
+            "mimeType": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            "parents": [parent_folder_id],
+        }
+        media = MediaFileUpload(
+            temp_docx_path,
+            mimetype="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        )
+        uploaded_file = (
+            drive_service.files()
+            .create(body=file_metadata, media_body=media, fields="id")
+            .execute()
+        )
+
+        # Cleanup temporary files
+        os.remove(temp_md_path)
+        os.remove(temp_docx_path)
+
+        return uploaded_file["id"]
+
+    except Exception as e:
+        print(f"Error converting file {file_id} to DOCX: {e}")
+        return None
+
+
 def get_gdrive_markdown_text(drive_service: Resource, file_id: str) -> str | None:
     """
     Retrieves the text content of a Markdown (.md) file from Google Drive.
@@ -523,6 +597,30 @@ def download_gdrive_file(drive_service: Resource, file_id: str, save_path: str) 
     request = drive_service.files().get_media(fileId=file_id)
     with open(save_path, "wb") as f:
         f.write(request.execute())
+
+
+def get_gdrive_file_creation_date(drive_service, file_id: str) -> str | None:
+    """
+    Retrieves the creation date of a file in Google Drive based on its file ID.
+
+    Args:
+        drive_service: Authenticated Google Drive API service instance.
+        file_id (str): The ID of the file to retrieve metadata for.
+
+    Returns:
+        str | None: The file's creation date in ISO format (YYYY-MM-DDTHH:MM:SS.sssZ) or None if an error occurs.
+    """
+    try:
+        file_metadata = (
+            drive_service.files().get(fileId=file_id, fields="createdTime").execute()
+        )
+        return file_metadata.get(
+            "createdTime"
+        )  # Example format: "2024-06-01T12:34:56.789Z"
+
+    except HttpError as error:
+        print(f"Error retrieving file creation date: {error}")
+        return None  # Return None if an error occurs
 
 
 def test_read_write() -> None:

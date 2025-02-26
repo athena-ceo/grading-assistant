@@ -1,3 +1,4 @@
+import markdown
 from referencing import Resource
 import streamlit as st
 from typing import Any, List
@@ -89,11 +90,24 @@ def make_configuration() -> Configuration:
 class Submission(BaseModel):
     """Represents a single student submission, containing metadata and content."""
 
-    name: str = Field(..., description="Name of the student if found")
-    date: str = Field(..., description="Date of submission formatted as YYYY-MM-DD")
+    name: str = Field(
+        ...,
+        description="Name of the student if found or empty string.  Might be in the original file name.",
+    )
+    date: str = Field(
+        ...,
+        description="Date of submission formatted as YYYY-MM-DD or empty string if none found",
+    )
     description: str = Field(..., description="Description of the submission")
+    original_file: str = Field(
+        ..., description="Google Drive file ID of the original submission"
+    )
+    original_file_name: str = Field(
+        ..., description="Name of the original submission file"
+    )
     markdown_content: str = Field(
-        ..., description="Markdown-formatted content of the submission"
+        ...,
+        description="Markdown-formatted content of the submission if found, empty string otherwise",
     )
     word_count: int = Field(
         ..., description="Word count of the markdown content of the submission"
