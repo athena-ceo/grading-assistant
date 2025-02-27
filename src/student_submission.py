@@ -49,9 +49,10 @@ st.subheader("Instructions")
 st.markdown(
     """
     Use this app to upload your DOCX or ODT files for grading.   
-    Select the correct exam for your submission, enter your name and email, choose the exam you are entering work for, and upload your file.
+    Enter your name and email, choose the exam you are entering work for, and upload your file.
     
     If you need assistance, please contact Professor Ghanem at [ghanima.ghanem@gmail.com](mailto:ghanima.ghanem@gmail.com).
+    Please let Professor Ghanem know when you have uploaded your work.
     """
 )
 st.divider()
@@ -67,7 +68,9 @@ batch_directories: dict[str, str] = st.session_state.batch_directories
 if batch_directories:
     default_batch: str = next(iter(batch_directories))  # Most recent batch
     selected_batch: str = st.selectbox(
-        "Select Batch Directory:", list(batch_directories.keys()), index=0
+        "Select the exam you are entering work for:",
+        list(batch_directories.keys()),
+        index=0,
     )
 else:
     st.error("No batch directories found. Please contact Professor Ghanem.")
