@@ -14,6 +14,9 @@ import os
 import tempfile
 import streamlit as st
 from streamlit.runtime.uploaded_file_manager import UploadedFile
+import smtplib
+import ssl
+from email.message import EmailMessage
 
 
 # Google Drive Setup
@@ -749,6 +752,117 @@ def generate_gdrive_link(file_id: str) -> str:
         str: The shareable Google Drive file link.
     """
     return f"https://drive.google.com/file/d/{file_id}/view"
+
+
+def get_gdrive_file_name(drive_service: Resource, file_id: str) -> str | None:
+    """
+    Retrieves the file name of a Google Drive file using its file ID.
+
+    Args:
+        drive_service: Authenticated Google Drive API service instance.
+        file_id (str): The ID of the file in Google Drive.
+
+    Returns:
+        str | None: The file name if found, otherwise None.
+    """
+    try:
+        file_metadata = (
+            drive_service.files().get(fileId=file_id, fields="name").execute()
+        )
+        return file_metadata.get("name")
+    except HttpError as error:
+        print(f"❌ Error retrieving file name: {error}")
+        return None
+
+
+def download_gdrive_file(drive_service: Resource, file_id: str) -> BytesIO | None:
+    """
+    Downloads a Google Drive file as a BytesIO object.
+
+    Args:
+        drive_service: Authenticated Google Drive API service instance.
+        file_id (str): The ID of the file in Google Drive.
+
+    Returns:
+        BytesIO | None: The file data as a BytesIO stream, or None if download fails.
+    """
+    try:
+        request = drive_service.files().get_media(fileId=file_id)
+        file_data = BytesIO()
+        downloader = MediaIoBaseDownload(file_data, request)
+
+        done = False
+        while not done:
+            _, done = downloader.next_chunk()
+
+        file_data.seek(0)  # Reset cursor to the beginning
+        return file_data
+
+    except Exception as e:
+        print(f"❌ Error downloading file from Google Drive: {e}")
+        return None
+
+
+def send_email_with_gdrive_attachment(
+    drive_service: Resource, recipient_email: str, subject: str, body: str, file_id: str
+) -> bool:
+    """
+    Sends an email with an attachment downloaded from Google Drive.
+
+    Args:
+        drive_service: Authenticated Google Drive API service instance.
+        recipient_email (str): The recipient's email.
+        subject (str): Email subject.
+        body (str): Email body.
+        file_id (str): The Google Drive file ID.
+
+    Returns:
+        None
+    """
+    sender_email: str = "ghanimaghanemprof@gmail.com"
+    sender_password: str = st.secrets["config"][
+        "grading_assistant_gmail_app_key"
+    ]  # Use App Password
+
+    # ✅ Create the email message
+    msg = EmailMessage()
+    msg["Subject"] = subject
+    msg["From"] = sender_email
+    msg["To"] = recipient_email
+    msg.set_content(body)
+
+    # ✅ Download file from Google Drive
+    try:
+        file_name: str | None = get_gdrive_file_name(drive_service, file_id)
+        if file_name is None:
+            print("❌ Error retrieving file name from Google Drive.")
+            return False
+        file_data: BytesIO | None = download_gdrive_file(drive_service, file_id)
+        if file_data is None:
+            print("❌ Error downloading file from Google Drive.")
+            return False
+        # ✅ Attach the downloaded file
+        msg.add_attachment(
+            file_data.read(),
+            maintype="application",
+            subtype="octet-stream",
+            filename=file_name,
+        )
+    except Exception as e:
+        print(f"❌ Error downloading file from Google Drive: {e}")
+        return False
+
+    # ✅ Secure Connection and Send Email
+    try:
+        context: smtplib.SSLContext = ssl.create_default_context()
+        with smtplib.SMTP_SSL("smtp.gmail.com", 465, context=context) as server:
+            server.login(sender_email, sender_password)
+            server.send_message(msg)
+            print("✅ Email sent successfully with attachment!")
+        return True
+    except Exception as e:
+        print(f"❌ Error sending email: {e}")
+        return False
 
 
 class MyData(BaseModel):

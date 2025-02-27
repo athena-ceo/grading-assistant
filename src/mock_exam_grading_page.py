@@ -2,6 +2,7 @@ from os import error
 import time
 import pprint
 from threading import Thread
+import docx
 from openai import OpenAI
 from openai.types.beta.threads.run import Run
 from referencing import Resource
@@ -15,9 +16,11 @@ from gdrive import (
     convert_gdrive_file_to_docx,
     ensure_gdrive_directory,
     get_gdrive_file_creation_date,
+    get_gdrive_file_name,
     get_gdrive_markdown_text,
     list_gdrive_files,
     upload_markdown_to_gdrive,
+    send_email_with_gdrive_attachment,
 )
 import gdrive
 
@@ -57,6 +60,35 @@ def generate_mock_exam(
         return None
     result: MockExam = response.choices[0].message.parsed
     return result
+
+
+def email_mock_exam_assessment(
+    drive_service: Resource, mock_exam: MockExam, docx_file_id: str
+) -> None:
+    """Email the final docx assessment to the professor for validation"""
+    prof_email: str = st.secrets["config"]["professor_email"]
+    docx_file_name: str | None = get_gdrive_file_name(drive_service, docx_file_id)
+    print(f"Emailing mock exam result in {docx_file_name} to {prof_email}...")
+    email_subject: str = (
+        f"Mock Exam grading results for {mock_exam.name} on {mock_exam.date}"
+    )
+    email_body: str = (
+        f"Please find attached the mock exam for {mock_exam.name} on {mock_exam.date}."
+        f"\n\nThe file can be found on the Google drive here: {gdrive.generate_gdrive_link(docx_file_id)}"
+        f"\n\nYours truly,\n\nThe Grading Assistant"
+    )
+
+    sent_ok: bool = send_email_with_gdrive_attachment(
+        drive_service,
+        prof_email,
+        email_subject,
+        email_body,
+        docx_file_id,
+    )
+    if sent_ok:
+        st.success(f"Mock exam for {mock_exam.name} sent to {prof_email}!")
+    else:
+        st.error(f"Error sending mock exam to {prof_email}!")
 
 
 def write_mock_exam_sections(
@@ -304,6 +336,7 @@ def mock_exam_grading_page() -> None:
             if docx_assessment_file_id is None:
                 st.error(f"Error converting assessment to docx!")
                 return
+            email_mock_exam_assessment(drive_service, exam, docx_assessment_file_id)
             print(f"Assessment converted to docx as {docx_assessment_file_id}!")
             st.success(f"Assessment for {exam.name} saved to {assessment_file_name}!")
 
