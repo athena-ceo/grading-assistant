@@ -13,7 +13,7 @@ from gdrive import (
 )
 
 # Set page config with favicon
-st.set_page_config(page_title="Student Submission", page_icon="📤")
+st.set_page_config(page_title="Student Submission", page_icon="📤", layout="wide")
 
 # Google Drive Setup
 init_google_drive()
@@ -52,6 +52,7 @@ st.markdown(
     Enter your name and email, choose the exam you are entering work for, and upload your file.
     
     If you need assistance, please contact Professor Ghanem at [ghanima.ghanem@gmail.com](mailto:ghanima.ghanem@gmail.com).
+    
     Please let Professor Ghanem know when you have uploaded your work.
     """
 )
