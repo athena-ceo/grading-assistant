@@ -738,6 +738,19 @@ def store_uploaded_file(
         return None
 
 
+def generate_gdrive_link(file_id: str) -> str:
+    """
+    Generates a shareable Google Drive link from a file ID.
+
+    Args:
+        file_id (str): The ID of the uploaded file in Google Drive.
+
+    Returns:
+        str: The shareable Google Drive file link.
+    """
+    return f"https://drive.google.com/file/d/{file_id}/view"
+
+
 class MyData(BaseModel):
     name: str = Field(..., description="Name of the item")
     value: int = Field(..., description="Integer value")

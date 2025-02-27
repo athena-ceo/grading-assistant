@@ -2,9 +2,13 @@ import re
 from typing import Any
 import streamlit as st
 from datetime import datetime
+import smtplib
+import ssl
+from email.message import EmailMessage
 
 from streamlit.runtime.uploaded_file_manager import UploadedFile
 from gdrive import (
+    generate_gdrive_link,
     get_gdrive_folder_path,
     init_google_drive,
     list_gdrive_subfolders,
@@ -35,6 +39,68 @@ def is_valid_email(email: str) -> bool:
     """Checks if an email is in a valid format."""
     email_regex = r"^[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+$"
     return re.match(email_regex, email) is not None
+
+
+def send_email_notification(
+    student_name: str,
+    student_email: str,
+    file_name: str,
+    md_file_id: str,
+    orig_file_id: str,
+) -> bool:
+    """
+    Sends an email notification to the professor when a student's submission is processed.
+
+    Args:
+        professor_email (str): The recipient's email (professor).
+        student_name (str): The name of the student who submitted the work.
+        file_name (str): The name of the submitted file.
+
+    Returns:
+        None
+    """
+    # ✅ Configure Email Sender & Receiver
+    sender_email: str = "ghanimaghanemprof@gmail.com"  # Use an authorized sender email
+    sender_password: str = st.secrets["config"]["grading_assistant_gmail_app_key"]
+    subject: str = f"📢 New Student Submission Processed from {student_name}"
+    body: str = f"""
+    Dear Professor,
+
+    A new student submission has been successfully uploaded and processed.
+    
+    Student Name: {student_name}
+    Student Email: {student_email}
+    File Submitted: {file_name}
+    
+    You can access the Markdown file in Google Drive using the following link:
+    {generate_gdrive_link(md_file_id)}
+    
+    You can access the original file in Google Drive using the following link:
+    {generate_gdrive_link(orig_file_id)}
+
+    Regards,
+    
+    The Grading Assistant
+    """
+
+    # ✅ Set up Email Message
+    msg = EmailMessage()
+    msg.set_content(body)
+    msg["Subject"] = subject
+    msg["From"] = sender_email
+    msg["To"] = st.secrets["config"]["professor_email"]  # Professor's email
+
+    # ✅ Secure Connection and Send Email
+    try:
+        context: smtplib.SSLContext = ssl.create_default_context()
+        with smtplib.SMTP_SSL("smtp.gmail.com", 465, context=context) as server:
+            server.login(sender_email, sender_password)
+            server.send_message(msg)
+            print("✅ Email sent successfully!")
+        return True
+    except Exception as e:
+        print(f"❌ Error sending email: {e}")
+        return False
 
 
 if "batch_directories" not in st.session_state:
@@ -118,5 +184,13 @@ if st.button("Submit Your Work"):
 
             if markdown_file_id:
                 st.success("Processing successful - congratulations!")
+                # Send Email Notification
+                send_email_notification(
+                    student_name,
+                    student_email,
+                    uploaded_file.name,
+                    markdown_file_id,
+                    file_id,
+                )
             else:
                 st.error("❌ Error in processing. Please try again later.")
