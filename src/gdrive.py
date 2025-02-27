@@ -6,20 +6,33 @@ from googleapiclient.http import MediaIoBaseDownload, MediaIoBaseUpload, MediaFi
 from googleapiclient.discovery import Resource
 from googleapiclient.errors import HttpError
 import io
+from io import BytesIO
 import json
 from pydantic import BaseModel, Field
 import pypandoc
 import os
 import tempfile
 import streamlit as st
+from streamlit.runtime.uploaded_file_manager import UploadedFile
 
 
-class MyData(BaseModel):
-    name: str = Field(..., description="Name of the item")
-    value: int = Field(..., description="Integer value")
+# Google Drive Setup
+def init_google_drive() -> None:
+    if "drive_service" in st.session_state:
+        return
+
+    drive_service: Any = create_drive_service()
+    st.session_state.drive_service = drive_service
+
+    st.session_state.config_directory_id = st.secrets["config"]["CONFIG_DIRECTORY_ID"]
+    st.session_state.config_file_name = st.secrets["config"]["CONFIG_FILE_NAME"]
+    st.session_state.output_folder_id = st.secrets["config"]["OUTPUT_FOLDER_ID"]
+    st.session_state.attachments_folder_id = st.secrets["config"][
+        "ATTACHMENTS_FOLDER_ID"
+    ]
 
 
-def create_drive_service(service_account_file: str) -> Optional[Resource]:
+def create_drive_service() -> Optional[Resource]:
     """Creates a Google Drive service object.
 
     Args:
@@ -230,9 +243,11 @@ def ensure_gdrive_directory(
 
 
 def list_gdrive_files(
-    drive_service: Any, folder_id: str, extensions: tuple[str, ...] = ("docx", "odt")
+    drive_service: Any,
+    folder_id: str,
+    extensions: tuple[str, ...] | None = ("docx", "odt"),
 ) -> dict[str, str] | None:
-    """Lists files in a Google Drive folder with specific extensions."""
+    """Lists files in a Google Drive folder with specific extensions.  If extensions is None, return all the files."""
     query: str = (
         f"'{folder_id}' in parents and mimeType!='application/vnd.google-apps.folder' and trashed=false"
     )
@@ -248,13 +263,52 @@ def list_gdrive_files(
         filtered_files: dict[Any, Any] = {
             file["name"]: file["id"]
             for file in files
-            if file["name"].lower().endswith(extensions)
+            if extensions is None or file["name"].lower().endswith(extensions)
         }
 
         return filtered_files  # Returns {filename: file_id} dictionary
     except Exception as e:
         print(f"An error occurred: {e}")
         return None  # Return empty dictionary in case of an error
+
+
+def list_gdrive_subfolders(
+    drive_service: Resource, parent_folder_id: str
+) -> dict[str, str]:
+    """
+    Retrieves all subfolder names and their IDs inside a given Google Drive folder.
+
+    Args:
+        drive_service: Authenticated Google Drive API service instance.
+        parent_folder_id (str): The ID of the parent folder to search within.
+
+    Returns:
+        Dict[str, str]: A dictionary where keys are subfolder names and values are their Google Drive IDs.
+    """
+    try:
+        query: str = (
+            f"'{parent_folder_id}' in parents and mimeType='application/vnd.google-apps.folder' and trashed=false"
+        )
+        results = (
+            drive_service.files()
+            .list(q=query, fields="files(id, name, createdTime)")
+            .execute()
+        )
+
+        # Extract subfolders with creation time
+        subfolders: list[Tuple[str, str, str]] = [
+            (file["name"], file["id"], file.get("createdTime", ""))
+            for file in results.get("files", [])
+        ]
+
+        # Sort by createdTime (latest first)
+        sorted_subfolders = sorted(subfolders, key=lambda x: x[2], reverse=True)
+
+        return {name: folder_id for name, folder_id, _ in sorted_subfolders}
+
+    except HttpError as error:
+        print(f"Error retrieving subfolders: {error}")
+        return {}
 
 
 def get_gdrive_folder_path(drive_service: Resource, folder_id: str) -> str | None:
@@ -293,73 +347,90 @@ def get_gdrive_folder_path(drive_service: Resource, folder_id: str) -> str | Non
     except HttpError as e:
         print(f"Error retrieving folder path: {e}")
         return None
+    except Exception as e:
+        print(f"Unexpected error: {e}")
+        return None
 
 
 def convert_gdrive_file_to_markdown(
-    drive_service: Any, file_id: str, file_name: str, target_dir_id: str
+    drive_service: Resource,
+    file_id: str,
+    file_name: str,
+    output_folder_id: str,
+    header_markdown: str = "",
 ) -> str | None:
     """
-    Downloads a Google Drive file, converts it to Markdown, and uploads it back to a specified Google Drive folder.
+    Downloads a Google Drive file, converts it to Markdown using pypandoc, prepends a header, and uploads it back to Google Drive.
 
-    :param drive_service: Authenticated Google Drive API service instance.
-    :param file_id: The ID of the file to convert.
-    :param target_dir_id: The ID of the target Google Drive folder where the markdown file will be uploaded.
+    Args:
+        drive_service: Authenticated Google Drive API service instance.
+        file_id (str): The ID of the file in Google Drive.
+        file_name (str): The original name of the uploaded file.
+        output_folder_id (str): The ID of the Google Drive folder to save the Markdown file.
+        header_markdown (str): Additional Markdown content to prepend to the converted text.
+
+    Returns:
+        str | None: The Google Drive file ID of the uploaded Markdown file, or None if conversion fails.
     """
-    print(f"Converting file '{file_name}' to Markdown...")
     try:
-        # Step 1: Get file metadata to retrieve original filename
-        file_metadata = drive_service.files().get(fileId=file_id).execute()
-        original_name: str = file_metadata["name"]
-        original_ext: str = os.path.splitext(original_name)[
-            1
-        ]  # Get original file extension
-        markdown_name: str = (
-            os.path.splitext(original_name)[0] + ".md"
-        )  # New markdown file name
-        print(f"Converting file '{original_name}' to Markdown file {markdown_name}...")
-        print(f"Directory is: {get_gdrive_folder_path(drive_service, target_dir_id)}")
-        # Step 2: Download the file from Google Drive
+        # Extract base name without extension
+        base_name: str = os.path.splitext(file_name)[0]
+        file_type: str = os.path.splitext(file_name)[1].lstrip(
+            "."
+        )  # Get file extension
+        temp_input_path: str = f"/tmp/{base_name}"
+        temp_md_path: str = f"/tmp/{base_name}.md"
+
+        # Download file content
         request = drive_service.files().get_media(fileId=file_id)
-        with tempfile.NamedTemporaryFile(
-            delete=False, suffix=original_ext
-        ) as temp_file:
-            temp_file_path: str = temp_file.name
-            print(f"Downloading file to: {temp_file_path}")
-            downloader = MediaIoBaseDownload(temp_file, request)
-            done = False
-            while not done:
-                _, done = downloader.next_chunk()
+        file_data = BytesIO()
+        downloader = MediaIoBaseDownload(file_data, request)
+        done = False
+        while not done:
+            status, done = downloader.next_chunk()
 
-        # Step 3: Convert to Markdown using pypandoc
-        markdown_path: str = temp_file_path.replace(original_ext, ".md")
-        print(f"Converting to Markdown file: {markdown_path}")
-        result: str = pypandoc.convert_file(
-            source_file=temp_file_path, to="md", outputfile=markdown_path
-        )
-        print(f"Conversion result: '{result}'")
+        # Save the downloaded file
+        with open(temp_input_path, "wb") as f:
+            f.write(file_data.getvalue())
 
-        # Step 4: Upload the markdown file to Google Drive
-        print(f"Uploading Markdown file to Google Drive...")
-        new_file_id: str | None = replace_gdrive_file(
-            drive_service, markdown_path, markdown_name, target_dir_id
+        # Convert to Markdown using Pandoc
+        converted_markdown = pypandoc.convert_file(
+            temp_input_path, "md", format=file_type
         )
 
-        # Cleanup temporary files
-        print("Cleaning up temporary files...")
-        os.remove(temp_file_path)
-        os.remove(markdown_path)
+        # Prepend the header Markdown
+        full_markdown = f"{header_markdown}\n\n{converted_markdown}"
 
-        print(
-            f"File successfully converted and uploaded as {markdown_name} with file ID {new_file_id}."
+        # Save Markdown content
+        with open(temp_md_path, "w", encoding="utf-8") as f:
+            f.write(full_markdown)
+
+        # Upload the converted Markdown file to Google Drive
+        file_metadata = {
+            "name": f"{base_name}.md",
+            "mimeType": "text/markdown",
+            "parents": [output_folder_id],
+        }
+        media = MediaFileUpload(temp_md_path, mimetype="text/markdown")
+        uploaded_file = (
+            drive_service.files()
+            .create(body=file_metadata, media_body=media, fields="id")
+            .execute()
         )
-        return new_file_id
+
+        # Cleanup temp files
+        os.remove(temp_input_path)
+        os.remove(temp_md_path)
+
+        return uploaded_file["id"]
+
     except Exception as e:
-        print(f"Error: {e}")
+        print(f"Error converting file {file_id} to Markdown: {e}")
         return None
 
 
 def convert_gdrive_file_to_docx(
-    drive_service, file_id: str, output_folder_id: str = None
+    drive_service: Resource, file_id: str, output_folder_id: str | None = None
 ) -> str | None:
     """
     Downloads a Google Drive file, converts it to DOCX using pypandoc, and uploads it back to Google Drive.
@@ -621,6 +692,55 @@ def get_gdrive_file_creation_date(drive_service, file_id: str) -> str | None:
     except HttpError as error:
         print(f"Error retrieving file creation date: {error}")
         return None  # Return None if an error occurs
+
+
+def store_uploaded_file(
+    drive_service: Resource, uploaded_file: UploadedFile, parent_folder_id: str
+) -> str | None:
+    """
+    Handles a Streamlit UploadedFile by saving it as a temporary file and uploading it to Google Drive.
+
+    Args:
+        drive_service: Authenticated Google Drive API service instance.
+        uploaded_file: Streamlit UploadedFile object.
+        parent_folder_id (str): The ID of the Google Drive folder where the file should be uploaded.
+
+    Returns:
+        str | None: The Google Drive file ID of the uploaded file, or None if upload fails.
+    """
+    try:
+        # ✅ Create a temporary file
+        with tempfile.NamedTemporaryFile(
+            delete=False, suffix=f".{uploaded_file.type.split('/')[-1]}"
+        ) as temp_file:
+            temp_file.write(uploaded_file.getbuffer())
+            temp_file_path: str = temp_file.name  # ✅ Path to the temp file
+
+        # ✅ Prepare file metadata for Google Drive upload
+        file_metadata = {"name": uploaded_file.name, "parents": [parent_folder_id]}
+        media = MediaFileUpload(temp_file_path, mimetype=uploaded_file.type)
+
+        # ✅ Upload the file to Google Drive
+        file_data = (
+            drive_service.files()
+            .create(body=file_metadata, media_body=media, fields="id")
+            .execute()
+        )
+        file_id: str = file_data.get("id")
+
+        # ✅ Cleanup temp file after upload
+        os.remove(temp_file_path)
+
+        return file_id
+
+    except Exception as e:
+        print(f"Error uploading file to Google Drive: {e}")
+        return None
+
+
+class MyData(BaseModel):
+    name: str = Field(..., description="Name of the item")
+    value: int = Field(..., description="Integer value")
 
 
 def test_read_write() -> None:
