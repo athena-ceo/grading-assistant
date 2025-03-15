@@ -23,6 +23,31 @@ st.set_page_config(page_title="Student Submission", page_icon="📤", layout="wi
 init_google_drive()
 
 
+def make_student_submission_filename(student_name: str, file_name: str) -> str:
+    """
+    Prepends the student's name to the uploaded file name with ' - ' if not already included.
+
+    Args:
+        student_name (str): The name of the student.
+        file_name (str): The original uploaded file name.
+
+    Returns:
+        str: The formatted file name.
+    """
+
+    # Normalize names by removing non-alphanumeric characters (excluding spaces and dots)
+    def normalize_name(name: str) -> str:
+        return re.sub(r"[^a-zA-Z0-9\s.]", "", name).strip().lower()
+
+    normalized_student_name: str = normalize_name(student_name)
+    normalized_file_name: str = normalize_name(file_name)
+
+    if normalized_student_name in normalized_file_name:
+        return file_name  # Return original if the name is already included
+
+    return f"{student_name} - {file_name}"
+
+
 def get_batch_directories() -> dict[str, str]:
     """Retrieve all subdirectories (batches) from the output directory, sorted by creation date."""
     drive_service = st.session_state.drive_service
@@ -162,12 +187,17 @@ if st.button("Submit Your Work"):
         st.warning("❌ Please enter a valid email address.")
         st.stop()
     drive_service = st.session_state.drive_service
-    with st.status(f"Uploading and processing {uploaded_file.name}..."):
+    final_file_name: str = make_student_submission_filename(
+        student_name, uploaded_file.name
+    )
+    with st.status(
+        f"Uploading and processing {uploaded_file.name}, renaming to {final_file_name}..."
+    ):
         batch_dir_id: str = batch_directories[selected_batch]
         with st.spinner(f"Uploading file {uploaded_file.name}..."):
             # Upload to Attachments Directory
             file_id: str | None = store_uploaded_file(
-                drive_service, uploaded_file, batch_dir_id
+                drive_service, uploaded_file, batch_dir_id, final_file_name
             )
         if file_id is None:
             st.error("❌ Error in uploading file. Please try again later.")
@@ -179,7 +209,7 @@ if st.button("Submit Your Work"):
                 f"Name: {student_name}\nEmail: {student_email}\nDate: {datetime.now().strftime('%Y-%m-%d')}"
             )
             markdown_file_id: str | None = convert_gdrive_file_to_markdown(
-                drive_service, file_id, uploaded_file.name, batch_dir_id, headers
+                drive_service, file_id, final_file_name, batch_dir_id, headers
             )
 
             if markdown_file_id:
@@ -188,7 +218,7 @@ if st.button("Submit Your Work"):
                 send_email_notification(
                     student_name,
                     student_email,
-                    uploaded_file.name,
+                    final_file_name,
                     markdown_file_id,
                     file_id,
                 )

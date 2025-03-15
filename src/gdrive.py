@@ -698,7 +698,10 @@ def get_gdrive_file_creation_date(drive_service, file_id: str) -> str | None:
 
 
 def store_uploaded_file(
-    drive_service: Resource, uploaded_file: UploadedFile, parent_folder_id: str
+    drive_service: Resource,
+    uploaded_file: UploadedFile,
+    parent_folder_id: str,
+    file_name: str | None = None,
 ) -> str | None:
     """
     Handles a Streamlit UploadedFile by saving it as a temporary file and uploading it to Google Drive.
@@ -711,6 +714,8 @@ def store_uploaded_file(
     Returns:
         str | None: The Google Drive file ID of the uploaded file, or None if upload fails.
     """
+    if file_name is None:
+        file_name = uploaded_file.name
     try:
         # ✅ Create a temporary file
         with tempfile.NamedTemporaryFile(
@@ -720,11 +725,14 @@ def store_uploaded_file(
             temp_file_path: str = temp_file.name  # ✅ Path to the temp file
 
         # ✅ Prepare file metadata for Google Drive upload
-        file_metadata = {"name": uploaded_file.name, "parents": [parent_folder_id]}
+        file_metadata: dict[str, Any] = {
+            "name": file_name,
+            "parents": [parent_folder_id],
+        }
         media = MediaFileUpload(temp_file_path, mimetype=uploaded_file.type)
 
         # ✅ Upload the file to Google Drive
-        file_data = (
+        file_data: Any = (
             drive_service.files()
             .create(body=file_metadata, media_body=media, fields="id")
             .execute()
